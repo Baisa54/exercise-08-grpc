@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from datetime import datetime
 
 import grpc
@@ -29,11 +30,14 @@ class NodeRegistryServicer(pb2_grpc.NodeRegistryServicer):
 
     def Register(self, request, context):
         """Register a new node in PostgreSQL."""
-        logger.info("Registering node: name=%s address=%s port=%d", request.name, request.address, request.port)
+        logger.info("Registering node: id=%s name=%s address=%s port=%d", request.id, request.name, request.address, request.port)
         db: Session = SessionLocal()
         try:
+            node_id = request.id if request.id else str(uuid.uuid4())
+            node_name = request.name if request.name else node_id
             node = NodeModel(
-                name=request.name,
+                id=node_id,
+                name=node_name,
                 address=request.address,
                 port=request.port,
                 status=request.status or "ACTIVE",
@@ -59,13 +63,15 @@ class NodeRegistryServicer(pb2_grpc.NodeRegistryServicer):
             db.close()
 
     def Get(self, request, context):
-        """Retrieve node information by ID."""
+        """Retrieve node information by ID or name."""
         logger.info("Fetching node: id=%s", request.id)
         db: Session = SessionLocal()
         try:
-            node = db.query(NodeModel).filter(NodeModel.id == request.id).first()
+            node = db.query(NodeModel).filter(
+                (NodeModel.id == request.id) | (NodeModel.name == request.id)
+            ).first()
             if not node:
-                context.abort(grpc.StatusCode.NOT_FOUND, f"Node with ID '{request.id}' not found")
+                context.abort(grpc.StatusCode.NOT_FOUND, f"Node with ID or name '{request.id}' not found")
                 return pb2.NodeResponse()
 
             return pb2.NodeResponse(
@@ -101,16 +107,19 @@ class NodeRegistryServicer(pb2_grpc.NodeRegistryServicer):
             db.close()
 
     def Delete(self, request, context):
-        """Delete registered node by ID."""
+        """Delete registered node by ID or name."""
         logger.info("Deleting node: id=%s", request.id)
         db: Session = SessionLocal()
         try:
-            node = db.query(NodeModel).filter(NodeModel.id == request.id).first()
-            if not node:
-                context.abort(grpc.StatusCode.NOT_FOUND, f"Node with ID '{request.id}' not found")
+            nodes = db.query(NodeModel).filter(
+                (NodeModel.id == request.id) | (NodeModel.name == request.id)
+            ).all()
+            if not nodes:
+                context.abort(grpc.StatusCode.NOT_FOUND, f"Node with ID or name '{request.id}' not found")
                 return pb2.Empty()
 
-            db.delete(node)
+            for node in nodes:
+                db.delete(node)
             db.commit()
             return pb2.Empty()
         except Exception as err:

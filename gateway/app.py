@@ -36,6 +36,7 @@ def get_grpc_stub() -> pb2_grpc.NodeRegistryStub:
 
 class NodeCreate(BaseModel):
     """Pydantic model for node registration request supporting flexible parameter names."""
+    id: Optional[str] = None
     name: Optional[str] = ""
     address: Optional[str] = None
     ip: Optional[str] = None
@@ -71,6 +72,7 @@ def _register_node(node_data: NodeCreate):
     try:
         resolved_address = node_data.get_address()
         req = pb2.RegisterRequest(
+            id=node_data.id or "",
             name=node_data.name or "",
             address=resolved_address,
             port=int(node_data.port or 0),
@@ -93,7 +95,9 @@ def _register_node(node_data: NodeCreate):
 
 
 @app.post("/nodes", response_model=NodeSchema, status_code=status.HTTP_201_CREATED)
+@app.post("/nodes/", response_model=NodeSchema, status_code=status.HTTP_201_CREATED)
 @app.post("/api/nodes", response_model=NodeSchema, status_code=status.HTTP_201_CREATED)
+@app.post("/api/nodes/", response_model=NodeSchema, status_code=status.HTTP_201_CREATED)
 def register_node(node_data: NodeCreate):
     """Register a new node via REST."""
     return _register_node(node_data)
@@ -122,7 +126,9 @@ def _list_nodes():
 
 
 @app.get("/nodes", response_model=List[NodeSchema])
+@app.get("/nodes/", response_model=List[NodeSchema])
 @app.get("/api/nodes", response_model=List[NodeSchema])
+@app.get("/api/nodes/", response_model=List[NodeSchema])
 def list_nodes():
     """List all registered nodes via REST."""
     return _list_nodes()
@@ -150,7 +156,9 @@ def _get_node(node_id: str):
 
 
 @app.get("/nodes/{node_id}", response_model=NodeSchema)
+@app.get("/nodes/{node_id}/", response_model=NodeSchema)
 @app.get("/api/nodes/{node_id}", response_model=NodeSchema)
+@app.get("/api/nodes/{node_id}/", response_model=NodeSchema)
 def get_node(node_id: str):
     """Get node details by ID via REST."""
     return _get_node(node_id)
@@ -160,16 +168,19 @@ def _delete_node(node_id: str):
     stub = get_grpc_stub()
     try:
         stub.Delete(pb2.DeleteRequest(id=node_id))
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except grpc.RpcError as err:
         if err.code() == grpc.StatusCode.NOT_FOUND:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Node '{node_id}' not found")
-        logger.error("gRPC error during Delete: %s", err)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(err))
+            logger.info("Node '%s' not found during delete, returning 204 for idempotent deletion", node_id)
+        else:
+            logger.error("gRPC error during Delete: %s", err)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(err))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete("/nodes/{node_id}/", status_code=status.HTTP_204_NO_CONTENT)
 @app.delete("/api/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete("/api/nodes/{node_id}/", status_code=status.HTTP_204_NO_CONTENT)
 def delete_node(node_id: str):
     """Delete a node by ID via REST."""
     return _delete_node(node_id)
