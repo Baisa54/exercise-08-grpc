@@ -7,7 +7,7 @@ import os
 import sys
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Response, status
 from pydantic import BaseModel
 import grpc
 
@@ -35,11 +35,17 @@ def get_grpc_stub() -> pb2_grpc.NodeRegistryStub:
 
 
 class NodeCreate(BaseModel):
-    """Pydantic model for node registration request."""
-    name: str
-    address: str
-    port: int
+    """Pydantic model for node registration request supporting flexible parameter names."""
+    name: Optional[str] = ""
+    address: Optional[str] = None
+    ip: Optional[str] = None
+    host: Optional[str] = None
+    port: Optional[int] = 8080
     status: Optional[str] = "ACTIVE"
+
+    def get_address(self) -> str:
+        """Resolve effective node address from address, ip, or host fields."""
+        return self.address or self.ip or self.host or ""
 
 
 class NodeSchema(BaseModel):
@@ -47,6 +53,8 @@ class NodeSchema(BaseModel):
     id: str
     name: str
     address: str
+    ip: Optional[str] = None
+    host: Optional[str] = None
     port: int
     status: str
     created_at: str
@@ -61,10 +69,11 @@ def health_check():
 def _register_node(node_data: NodeCreate):
     stub = get_grpc_stub()
     try:
+        resolved_address = node_data.get_address()
         req = pb2.RegisterRequest(
-            name=node_data.name,
-            address=node_data.address,
-            port=node_data.port,
+            name=node_data.name or "",
+            address=resolved_address,
+            port=int(node_data.port or 0),
             status=node_data.status or "ACTIVE"
         )
         res = stub.Register(req)
@@ -72,6 +81,8 @@ def _register_node(node_data: NodeCreate):
             "id": res.id,
             "name": res.name,
             "address": res.address,
+            "ip": res.address,
+            "host": res.address,
             "port": res.port,
             "status": res.status,
             "created_at": res.created_at
@@ -97,6 +108,8 @@ def _list_nodes():
                 "id": n.id,
                 "name": n.name,
                 "address": n.address,
+                "ip": n.address,
+                "host": n.address,
                 "port": n.port,
                 "status": n.status,
                 "created_at": n.created_at
@@ -123,6 +136,8 @@ def _get_node(node_id: str):
             "id": res.id,
             "name": res.name,
             "address": res.address,
+            "ip": res.address,
+            "host": res.address,
             "port": res.port,
             "status": res.status,
             "created_at": res.created_at
@@ -145,7 +160,7 @@ def _delete_node(node_id: str):
     stub = get_grpc_stub()
     try:
         stub.Delete(pb2.DeleteRequest(id=node_id))
-        return {"message": f"Node '{node_id}' deleted successfully"}
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     except grpc.RpcError as err:
         if err.code() == grpc.StatusCode.NOT_FOUND:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Node '{node_id}' not found")
@@ -153,8 +168,8 @@ def _delete_node(node_id: str):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(err))
 
 
-@app.delete("/nodes/{node_id}")
-@app.delete("/api/nodes/{node_id}")
+@app.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete("/api/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_node(node_id: str):
     """Delete a node by ID via REST."""
     return _delete_node(node_id)
